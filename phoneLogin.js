@@ -1,12 +1,12 @@
-import { execSync } from "child_process";
-import { printBlue, printGreen, printRed, printYellow } from "./utils/colorOut.js";
-import { close_api, delay, send, startService } from "./utils/utils.js";
+import { printGreen, printRed, printYellow } from "./utils/colorOut.js";
+import { sanitizeForLog, summarizeResponse } from "./utils/safeLog.js";
+import { upsertUser, saveUserinfo } from "./utils/userinfo.js";
+import { close_api, delay, send, startService, waitForApi } from "./utils/utils.js";
 
 async function login() {
 
   const phone = process.env.PHONE
   const code = process.env.CODE
-  const PAT = process.env.PAT
   const USERINFO = process.env.USERINFO
   const APPEND_USER = process.env.APPEND_USER
   const userinfo = (USERINFO && APPEND_USER == "是") ? JSON.parse(USERINFO) : []
@@ -15,66 +15,32 @@ async function login() {
   if (!phone || !code) {
     throw new Error("未配置")
   }
-  // 启动服务
+  // 启动服务并等待就绪（避免冷启动竞态）
   const api = startService()
-  await delay(2000)
+  try {
+    await waitForApi()
+  } catch (e) {
+    close_api(api)
+    throw e
+  }
 
   try {
     // 手机号登录请求
     const result = await send(`/login/cellphone?mobile=${phone}&code=${code}`, "GET", {})
     if (result.status === 1) {
-
-      let userAlreadyExist = false
       printGreen("登录成功！")
-      if (PAT) {
-        if (APPEND_USER == "是") {
-          for (let i = 0; i < userinfo.length; i++) {
-
-            if (userinfo[i].userid == res.data.userid) {
-              userAlreadyExist = true
-              printYellow(`userid: ${userinfo[i].userid} 此账号已存在, 仅更新登录信息`)
-              userinfo[i].token = res.data.token
-            }
-          }
-        }
-        if (!userAlreadyExist) {
-          userinfo.push({
-            userid: res.data.userid,
-            token: res.data.token
-          })
-        }
-        if (userinfo.length) {
-          const userinfoJSON = JSON.stringify(userinfo)
-          if (PAT) {
-            try {
-              execSync(`gh secret set USERINFO -b'${userinfoJSON}' --repo ${process.env.GITHUB_REPOSITORY}`);
-              printGreen("secret <USERINFO> 更改成功")
-            } catch (error) {
-              printRed("自动写入出错，登录信息如下，请手动添加到secret USERINFO")
-              printRed(userinfoJSON)
-            }
-          } else {
-            printGreen("登录信息如下，把它添加到secret USERINFO 即可")
-            printBlue(userinfoJSON)
-          }
-        }
-      } else {
-        printRed("PAT变量缺失")
-      }
+      upsertUser(userinfo, { userid: result.data.userid, token: result.data.token }, APPEND_USER == "是")
+      saveUserinfo(userinfo)
     } else if (result.error_code === 34175) {
       throw new Error("暂不支持多账号绑定手机登录")
     } else {
       printRed("响应内容")
-      console.dir(result, { depth: null })
+      console.dir(summarizeResponse(result), { depth: null })
       throw new Error("登录失败！请检查")
     }
   } finally {
     close_api(api)
   }
-
-  if (api.killed) {
-    process.exit(0)
-  }
 }
 
-login()
+login().then(() => process.exit(0)).catch(e => { console.error(e); process.exit(1) })

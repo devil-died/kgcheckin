@@ -137,7 +137,7 @@ const createRequest = (options) => {
         answer.body = body;
       }
 
-      if (response.data.status === 0 || (response.data?.error_code && response.data.error_code !== 0)) {
+      if (response.data?.status === 0 || (response.data?.error_code && response.data.error_code !== 0)) {
         answer.status = 502;
         reject(answer);
       } else {
@@ -145,8 +145,24 @@ const createRequest = (options) => {
         resolve(answer);
       }
     } catch (e) {
+      const responseBody = e?.response?.data;
+      const responseSummary = responseBody && typeof responseBody === 'object'
+        ? {
+            status: responseBody.status,
+            code: responseBody.code,
+            error_code: responseBody.error_code,
+            errcode: responseBody.errcode,
+            msg: responseBody.msg || responseBody.message || responseBody.error,
+          }
+        : {};
       answer.status = 502;
-      answer.body = { status: 0, msg: e };
+      answer.body = {
+        status: 0,
+        msg: responseSummary.msg || e?.message || 'request failed',
+        code: e?.code,
+        httpStatus: e?.response?.status,
+        ...responseSummary,
+      };
       reject(answer);
     }
   });
